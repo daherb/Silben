@@ -1,21 +1,8 @@
-#include <stdio.h>
-#include <errno.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <string.h>
-#include <limits.h>
-#include <ctype.h>
+#include <fstream>
+#include <iostream>
+#include <unordered_map>
 
-#ifdef DMALLOC
-#include <dmalloc.h>
-#endif
-
-#include "hash.hpp"
-#include "pstring.hpp"
-#include "queue.hpp"
+using namespace std;
 
 /*
  *  Name:      google_frequncy_list.c
@@ -25,73 +12,40 @@
  *
  */
 
-
-int read_frequency(Hash<int> *h,FILE *fh)
+int main(int argc, char **argv)
 {
-  char word[255];
+  unordered_map<string,unsigned long long int> freq_list;
+  string word;
   int year;
   int match_count;
   int page_count;
   int volume_count;
-  long long int ct=0;
-  while(fscanf(fh,"%s\t%d\t%d\t%d\t%d",word,&year,&match_count,&page_count,&volume_count)>0)
+  unsigned long long int ct=0;
+  ifstream in;
+  for (int ct=0; ct<10; ct++)
     {
-      if(ct%100000==0)
-      	printf("%lld\n",ct);
-      //if(ct>1000000)
-      //	break;
-      ct++;
-      //      printf("%s\t%d\t%d\t%d\t%d\n",word,year,match_count,page_count,volume_count);
-      // Put word in the frequency list
-      // Check if word starts with a letter
-      //if (((word[0]>=65)&&(word[0]<=90))||((word[0]>=97)&&(word[0]<=122)))
+      string fn="googlebooks-ger-all-1gram-20090715-"+to_string(ct)+string(".csv");
+      in.open(fn.c_str());
+      while(!in.eof())
 	{
-	  Pstring token;
+	  in >> word >> year >> match_count >> page_count >> volume_count;
+	  if(ct%100000==0)
+	    cerr << ct << endl;
+	  ct++;
 	  // Set all to lowercase
-	  for (int ct = 0; word[ct]; ct++)
-	    word[ct] = tolower(word[ct]);
-	  token=word;
-	  int oldval=h->getValue(token);
+	  for (int ct2=0; ct2<word.length(); ct2++)
+	    word[ct2]=tolower(word[ct2]);
+	  if (word[0]>='a'&&word[0]<='z')
+	    {
 #ifdef DEBUG
-	  printf("Set Value for %s from %d to %d\n",token.getValue(), oldval, oldval+match_count);
+	      cerr << word << endl;
 #endif
-	  h->setValue(token,oldval+match_count);
+	      freq_list[word]+=match_count;
+	    }
 	}
+      in.close();
     }
-  return 0;
-}
-
-// Globale Variablen
-Hash<int> *google_frequency;
-int main(int argc, char **argv)
-{
-  // Read google list and create simple frequency list
-  {
-    google_frequency=new Hash<int>();
-    FILE *fh=fopen64(argv[1],"r");
-    if (fh==NULL)
-      {
-	perror("Error opening frequency list");
-	_exit(errno);
-      }
-    if (read_frequency(google_frequency,fh)==-1)
-      {
-	perror("Error reading syllable list");
-	_exit(errno);
-      }
-    fclose(fh);
-  }
-  // Write hash to disk
-  Queue<Pstring> *keys=google_frequency->keys();
-  FILE *fh=fopen(argv[2],"w");
-  while (keys->isEmpty()==false)
-    {
-      Pstring key=keys->remove();
-      fprintf(fh,"%.*s\t%d\n",key.getLength(),key.getValue(),google_frequency->getValue(key));
-    }
-  delete(keys);
-  google_frequency->statistics();
-  delete(google_frequency);
-  fclose(fh);
+  for ( auto it = freq_list.begin(); it != freq_list.end(); ++it )
+    std::cout << it->first << " " << it->second << std::endl;
   return 0;
 }
