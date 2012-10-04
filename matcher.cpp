@@ -13,28 +13,34 @@
 #include <fstream>
 #include <algorithm>
 
-#define THREAD_COUNT 4  // Number of Cores of a host
+#define THREAD_COUNT 1  // Number of Cores of a host
 #define SYLLABLE_LIST_FILE (char *) "silbenliste.txt"
 #define FREQ_LIST_FILE (char *) "frequenzliste.txt"
-#define RESULT_FILE (char *) "ergebnis.txt"
+//#define RESULT_FILE (char *) "ergebnis.txt"
 
 using namespace std;
 
 // Criteria for std::sort: Sort the mapping so that frequent syllables are preferred to infrequent and longer syllables to shorter
 static bool sort_criteria(const pair<string, unsigned long long int>  *a, const pair<string, unsigned long long int>  *b)
 {
+#ifdef LONG_FIRST
   return ((a->second<b->second)||((a->second==b->second)&&(a->first.length()>b->first.length())));
+#endif
+#ifdef SHORT_FIRST
+  return ((a->second<b->second)||((a->second==b->second)&&(a->first.length()<b->first.length())));
+#endif
+  return 1;
 }
 
 class matcher
 {
 private:
   // The result
-  unordered_map<string,unsigned long long int> *result=NULL;
+  unordered_map<string,unsigned long long int> *result;
   // Array of Word-Count-Pairs
   vector<pair<string,unsigned long long int> *> freq_list;
   // Current possition in the array
-  int current_data=0;
+  int current_data;
   // Thread ids
   pthread_t tids[THREAD_COUNT];
   // Mutex for thread access to data
@@ -62,6 +68,8 @@ public:
 
 matcher::matcher()
 {
+  current_data=0;
+  result=NULL;
   // Initialize vector for result
   result=new unordered_map<string, unsigned long long int>();
   // Read the frequency list
@@ -82,10 +90,13 @@ matcher::matcher()
 void matcher::wait_for_threads()
 {
   // wait for all the children
+#ifdef STATUS
+  cerr << "Waiting for threads" << endl;
+#endif
   for (int ct=0;ct<THREAD_COUNT;ct++)
     {
       vector<pair<string,unsigned long long int> *> *val=NULL;
-      if (pthread_join(tids[ct],(void **)val)!=0)
+      if (pthread_join(tids[ct],(void **)&val)!=0)
 	cerr << "Error joining thread" << ct << endl;
       for (unsigned int ct=0; ct<val->size(); ct++)
 	(*result)[val->at(ct)->first]+=val->at(ct)->second;
@@ -101,7 +112,7 @@ matcher ::~matcher()
 
 void matcher::read_syllable_list(char *filename, vector<pair<string,unsigned long long int> *> *syllables)
 {
-#ifdef DEBUG
+#ifdef STATUS
   cerr << "Reading syllable frequency list" << endl;
 #endif
   ifstream in;
@@ -121,7 +132,7 @@ void matcher::read_syllable_list(char *filename, vector<pair<string,unsigned lon
 // Read the syllables from a file into the vector
 void matcher::read_freq_list(char *filename)
 {
-#ifdef DEBUG
+#ifdef STATUS
   cerr << "Reading word frequency list" << endl;
 #endif
   ifstream in;
@@ -148,6 +159,22 @@ void matcher::sort_syllables(vector<pair<string, unsigned long long int>  *> *sy
 // Updates syllable score by word and word score
 int matcher::match(string word, int score, vector<pair<string, unsigned long long int> *> *syllables)
 {
+#ifdef DUMB
+  for (unsigned int ct=0;ct<syllables->size();ct++)
+    {
+      size_t pos=word.find((*syllables)[ct]->first);
+      if (pos>0)
+	{
+	  unsigned long long int oldscore=(*syllables)[ct]->second;
+	  (*syllables)[ct]->second+=score;
+	  if ((*syllables)[ct]->second<oldscore)
+	    return -1;
+#ifdef DEBUG2
+  cerr << "Got syllable " << ct <<" - " << (*syllables)[ct]->first << " with new count " << (*syllables)[ct]->second <<endl;
+#endif
+	}
+    }
+#else
   // Stack for the positions and syllable number
   vector<int> history;
   unsigned int curpos=0;
@@ -167,7 +194,6 @@ int matcher::match(string word, int score, vector<pair<string, unsigned long lon
   cerr << "Trying syllable " << ct <<" - " << (*syllables)[ct]->first << " at Position " << curpos <<endl;
 #endif
 	  // Syllable is prefix of the substring starting at curpos
-	  //	  if (strncmp(&((word->getValue())[curpos]),(*syllables)[ct]->word.getValue(),(*syllables)[ct]->word.getLength())==0)
 	  if (word.substr(curpos,(*syllables)[ct]->first.length())==(*syllables)[ct]->first)
 	    {
 	      match=1;
@@ -226,6 +252,7 @@ int matcher::match(string word, int score, vector<pair<string, unsigned long lon
 	}
     }
   sort_syllables(syllables);
+#endif
   return 1;
 }
 
@@ -249,15 +276,17 @@ void matcher::init_syllables(char *syllable_list, vector<pair<string, unsigned l
 #if DEBUG
   cerr << "Sorting map" << endl;
 #endif
+#ifndef DUMB
   sort_syllables(*syllables);
+#endif
 }
 
 // Worker for Threads
 void *matcher::thread_work()
 {
-#ifdef DEBUG
-  //  if (current_data % 20000 ==0)
-  cerr << current_data << " of " << freq_list.size() << endl;
+#ifdef STATUS
+  if (current_data % 1000 ==0)
+    cerr << current_data << " of " << freq_list.size() << endl;
 #endif
     vector<pair<string,unsigned long long int> *> *syllables=NULL;
     init_syllables(SYLLABLE_LIST_FILE,&syllables);
@@ -272,10 +301,12 @@ void *matcher::thread_work()
 	mydata=current_data;
 	current_data++;
 	pthread_mutex_unlock(&mutex);
-	if (match(freq_list[mydata]->first,freq_list[mydata]->second, syllables)==-1)
-	  cerr << "Overflow in syllable counter" << endl;
+	if (mydata<freq_list.size())
+	  {
+	    if (match(freq_list[mydata]->first,freq_list[mydata]->second, syllables)==-1)
+	      cerr << "Overflow in syllable counter" << endl;
+	  }
       }
-    pthread_exit(syllables);
     return syllables;
 }
 
@@ -310,7 +341,6 @@ void matcher::store_result(char *filename)
 void matcher::store_result(ostream *out)
 {
   for ( unsigned i = 0; i < (*result).bucket_count(); ++i) {
-    std::cout << "bucket #" << i << " contains:";
     for ( auto local_it = (*result).begin(i); local_it!= (*result).end(i); ++local_it )
       *out << i <<":" << local_it->first << ":" << local_it->second <<  std::endl;
   }
